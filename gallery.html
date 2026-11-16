@@ -1,0 +1,430 @@
+<!--
+Project: Art
+Repository: https://github.com/mkview/Art
+Description: Artist portfolio and gallery web application.
+
+Copyright (c) 2026 mkview. All rights reserved.
+
+This source file is part of the Art project and is licensed under the
+Boost Software License 1.0 (BSL-1.0).
+See the LICENSE file in this repository for the full license text.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gallery</title>
+  <style>
+    :root { color-scheme:dark; --bg:#121212; --panel:#1e1e1e; --text:#e0e0e0; --accent:#007bff; }
+    * { box-sizing:border-box; user-select:none; -webkit-user-select:none; }
+    body { margin:0; height:100vh; display:flex; flex-direction:column; overflow:hidden; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+    header { z-index:2; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 20px; background:var(--panel); border-bottom:1px solid #333; }
+    .logo-container { display:flex; align-items:center; gap:10px; color:inherit; text-decoration:none; }
+    .logo-img { width:35px; height:35px; object-fit:cover; border-radius:4px; background:#333; }
+    .brand-name,.gallery-title { color:#fff; font-weight:700; }
+    .header-actions { display:flex; gap:8px; }
+    .btn { padding:8px 14px; color:white; background:#333; border:0; border-radius:4px; text-decoration:none; cursor:pointer; }
+    .btn:hover { background:var(--accent); }
+    .workspace { flex:1; min-height:0; position:relative; overflow:hidden; background:#0a0a0a; }
+    .grid-view { width:100%; height:100%; overflow:auto; padding:24px; display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:20px; align-content:start; }
+    .preview-card { overflow:hidden; display:flex; flex-direction:column; background:var(--panel); border:1px solid #222; border-radius:6px; cursor:pointer; align-self:start; width:100%; }
+    .preview-frame { height:220px; display:flex; align-items:center; justify-content:center; background:#151515; }
+    .preview-frame img { max-width:100%; max-height:100%; object-fit:contain; pointer-events:none; }
+    .preview-info { padding:12px; border-top:1px solid #252525; }
+    .preview-info h3 { margin:0 0 5px; color:#fff; font-size:15px; }
+    .preview-info p { margin:0; color:#999; font-size:13px; }
+    .single-view { display:none; position:absolute; inset:0; flex-direction:column; background:#050505; }
+    .workspace.show-single .grid-view { display:none; }
+    .workspace.show-single .single-view { display:flex; }
+    .image-stage { flex:1; min-height:0; position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; padding:20px; touch-action:none; }
+    .image-wrapper { width:100%; height:100%; display:flex; align-items:center; justify-content:center; transition:transform .1s ease-out; }
+    .image-wrapper img { max-width:100%; max-height:100%; object-fit:contain; pointer-events:none; }
+    .nav-arrow { position:absolute; z-index:1; top:50%; transform:translateY(-50%); padding:12px 16px; color:white; background:#0009; border:0; border-radius:4px; font-size:24px; cursor:pointer; }
+    #prevBtn { left:16px; } #nextBtn { right:16px; }
+    .metadata { padding:14px 20px; text-align:center; background:var(--panel); border-top:1px solid #333; }
+    .metadata h2 { margin:0 0 5px; color:white; font-size:18px; }
+    .metadata p { margin:4px 0; color:#aaa; font-size:14px; }
+    body.fullscreen-mode { overflow:hidden; }
+    body.fullscreen-mode header,
+    body.fullscreen-mode .metadata,
+    body.fullscreen-mode #backToGridBtn,
+    body.fullscreen-mode #fsBtn { display:none !important; }
+    body.fullscreen-mode .workspace { position:fixed; inset:0; width:100vw; height:100vh; }
+    body.fullscreen-mode .single-view { inset:0; }
+    body.fullscreen-mode .image-stage { padding:0; background:#000; }
+    body.fullscreen-mode .image-wrapper { width:100%; height:100%; }
+    body.fullscreen-mode .nav-arrow { display:block !important; }
+    @media(max-width:700px) { header { flex-direction:column; } .grid-view { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); padding:12px; gap:12px; } .preview-frame { height:150px; } }
+  </style>
+  <script defer src="https://cdn.jsdelivr.net/npm/exifreader@4.23.5/dist/exif-reader.min.js"></script>
+</head>
+<body>
+  <header>
+    <a id="logoLink" class="logo-container" href="index.html"><img id="logoImg" class="logo-img" src="logo.jpeg" alt="Logo" onerror="this.style.display='none'"><span class="brand-name">Artist Portfolio</span></a>
+    <span id="galleryTitle" class="gallery-title"></span>
+    <div class="header-actions">
+      <button id="backToGridBtn" class="btn" style="display:none" onclick="exitToGrid()">Gallery View</button>
+      <button id="fsBtn" class="btn" style="display:none" onclick="toggleFullScreen()">Full Screen</button>
+      <a id="homeHubBtn" class="btn" href="index.html">Main Page</a>
+    </div>
+  </header>
+  <div id="workspace" class="workspace">
+    <div id="gridView" class="grid-view"></div>
+    <section id="singleView" class="single-view">
+      <button id="prevBtn" class="nav-arrow" onclick="navigate(-1)" aria-label="Previous image">‹</button>
+      <button id="nextBtn" class="nav-arrow" onclick="navigate(1)" aria-label="Next image">›</button>
+      <div id="stage" class="image-stage"><div id="imgWrapper" class="image-wrapper"><img id="galleryImg" alt="Artwork"></div></div>
+      <div class="metadata"><h2 id="metaTitle"></h2><p id="metaDetails"></p></div>
+    </section>
+  </div>
+  <script>
+    let siteConfig, allImages = [], filteredImages = [], currentIndex = 0;
+    let scale = 1, pointX = 0, pointY = 0, startX = 0, startY = 0, isPanning = false, touchStartX = 0, touchStartY = 0, lastTouchDist = 0;
+    const workspace = document.getElementById('workspace');
+    const gridView = document.getElementById('gridView');
+    const imgWrapper = document.getElementById('imgWrapper');
+    const galleryImg = document.getElementById('galleryImg');
+    const stage = document.getElementById('stage');
+    const backToGridBtn = document.getElementById('backToGridBtn');
+    const fsBtn = document.getElementById('fsBtn');
+    const homeHubBtn = document.getElementById('homeHubBtn');
+
+    function getConfigUrl() {
+      const requested = new URLSearchParams(location.search).get('config');
+      return requested ? new URL(requested, location.href).href : new URL('config.json', location.href).href;
+    }
+    function resolveDataUrl(value, fallback, configUrl) { return new URL(value || fallback, configUrl).href; }
+    function makeViewerUrl(pageName, params = {}) {
+      const url = new URL(pageName, location.href);
+      url.search = '';
+      if (siteConfig?.configUrl) url.searchParams.set('config', siteConfig.configUrl);
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
+      });
+      return url.href;
+    }
+    async function loadSiteConfig() {
+      const configUrl = getConfigUrl();
+      const response = await fetch(configUrl);
+      if (!response.ok) throw new Error(`Could not load configuration from ${configUrl}`);
+      const data = await response.json();
+      const folderValues = data.ImgFolderUrls || data.imgFolderUrls || data.img_folder_urls;
+      const legacyFolderValue = data.ImgFolderUrl || data.imgFolderUrl || data.img_folder_url;
+      const folderUrls = Array.isArray(folderValues)
+        ? folderValues
+        : (legacyFolderValue ? [legacyFolderValue] : []);
+      return {
+        configUrl,
+        brandName: data.brandName || data.brand_name || 'Artist Portfolio',
+        logoUrl: resolveDataUrl(data.logoUrl || data.logo_url, 'logo.jpeg', configUrl),
+        galleriesUrl: resolveDataUrl(data.galleriesUrl || data.galleries_url, 'galleries.json', configUrl),
+        imgFolderUrls: folderUrls
+          .filter(value => typeof value === 'string' && value.trim())
+          .map(value => new URL(value, configUrl).href),
+        selected: data.Selected && typeof data.Selected === 'object' && !Array.isArray(data.Selected) ? data.Selected : null
+      };
+    }
+    function applyBranding() {
+      document.title = siteConfig.brandName;
+      document.querySelector('.brand-name').textContent = siteConfig.brandName;
+      document.getElementById('logoImg').src = siteConfig.logoUrl;
+      document.getElementById('logoLink').href = makeViewerUrl('index.html');
+      homeHubBtn.href = makeViewerUrl('index.html');
+    }
+    function getSearchQuery() { return (new URLSearchParams(location.search).get('search') || '').trim().toLowerCase(); }
+    function splitSearchTerms(query) {
+      const terms = [];
+      const pattern = /"([^"]+)"|([^,\s]+)/g;
+      for (const match of query.matchAll(pattern)) {
+        const term = (match[1] || match[2]).trim().toLowerCase();
+        if (term && !terms.includes(term)) terms.push(term);
+      }
+      return terms;
+    }
+    function formatSearchTerms(query) {
+      const terms = splitSearchTerms(query);
+      if (!terms.length) return '';
+      return terms.map(term => term.replace(/\b\w/g, char => char.toUpperCase())).join(', ');
+    }
+
+    function metadataText(tag) {
+      if (!tag) return '';
+      const value = tag.description ?? tag.value ?? tag;
+      if (Array.isArray(value)) return value.map(part => typeof part === 'object' ? (part.description ?? part.value ?? '') : part).filter(Boolean).join(', ').trim();
+      return String(value ?? '').trim();
+    }
+    function findMetadata(tags, names) {
+      const entries = Object.entries(tags || {}).map(([key, tag]) => [key.toLowerCase().replace(/[^a-z0-9]/g, ''), tag]);
+      for (const name of names) {
+        const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const found = entries.find(([key]) => key === normalized);
+        if (found) {
+          const text = metadataText(found[1]);
+          if (text) return text;
+        }
+      }
+      return '';
+    }
+    function parseDescriptionFields(description) {
+      if (!description) return {};
+      try {
+        const parsed = JSON.parse(description);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      } catch { /* Accept the common unquoted-key, comma-separated metadata form too. */ }
+
+      const fields = {};
+      const keyPattern = /(?:^|,)\s*(year|medium|technic|technique|width|height|dimensions)\s*:\s*/ig;
+      const matches = [...description.matchAll(keyPattern)];
+      matches.forEach((match, index) => {
+        const valueStart = match.index + match[0].length;
+        const next = matches[index + 1];
+        const valueEnd = next ? next.index : description.length;
+        const value = description.slice(valueStart, valueEnd).replace(/,\s*$/, '').trim().replace(/^("|')(.*)\1$/, '$2');
+        if (value) fields[match[1].toLowerCase()] = value;
+      });
+      return fields;
+    }
+    function imageFromMetadata(url, tags) {
+      const title = findMetadata(tags, ['Document Title', 'XMP-dc:Title', 'dc:title', 'Object Name', 'Title']);
+      const keywords = findMetadata(tags, ['Keywords', 'XMP-dc:Subject', 'dc:subject', 'Subject']);
+      const description = findMetadata(tags, ['Description', 'Image Description', 'XMP-dc:Description', 'dc:description', 'Caption-Abstract', 'User Comment']);
+      const fields = parseDescriptionFields(description);
+      const filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '').replace(/\.jpe?g$/i, '').replace(/[_-]+/g, ' ');
+      return {
+        url,
+        title: title || filename || 'Untitled',
+        keywords,
+        year: fields.year || '',
+        medium: fields.medium || '',
+        technic: fields.technic || fields.technique || '',
+        width: fields.width || '',
+        height: fields.height || '',
+        dimensions: fields.dimensions || '',
+        dimensionsFromMetadata: true
+      };
+    }
+    async function readImageMetadata(url) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Could not read image metadata from ${url}`);
+      const buffer = await response.arrayBuffer();
+      if (!window.ExifReader) throw new Error('JPEG metadata reader failed to load');
+      return imageFromMetadata(url, ExifReader.load(buffer));
+    }
+    function getGithubContentsUrlFromFolderUrl(folderUrl) {
+      const url = new URL(folderUrl, location.href);
+      const segments = url.pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+
+      if (url.hostname.endsWith('.github.io') && segments.length >= 2) {
+        const [repoName, ...rest] = segments;
+        const owner = url.hostname.replace(/\.github\.io$/i, '');
+        const cleanPath = rest.join('/');
+        return `https://api.github.com/repos/${owner}/${repoName}/contents/${cleanPath ? `${cleanPath}` : ''}`;
+      }
+
+      const githubTreeMatch = url.href.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/[^/]+\/(.+)$/i);
+      if (githubTreeMatch) {
+        const [, owner, repo, path] = githubTreeMatch;
+        return `https://api.github.com/repos/${owner}/${repo}/contents/${decodeURIComponent(path)}`;
+      }
+
+      return null;
+    }
+    async function loadFolderCatalog(folderUrl) {
+      const folder = new URL(folderUrl, location.href);
+      const githubApiUrl = getGithubContentsUrlFromFolderUrl(folder.href);
+
+      let fileUrls = [];
+      if (githubApiUrl) {
+        const response = await fetch(githubApiUrl, { headers: { Accept: 'application/vnd.github+json' } });
+        if (!response.ok) throw new Error(`Could not list images in ${folderUrl}`);
+        const entries = await response.json();
+        if (!Array.isArray(entries)) throw new Error(`Unexpected image listing from ${folderUrl}`);
+        fileUrls = entries
+          .filter(entry => entry && entry.type === 'file' && /\.jpe?g$/i.test(entry.name))
+          .map(entry => entry.download_url || entry.url?.replace('https://api.github.com/repos/', 'https://raw.githubusercontent.com/').replace('/contents/', '/'));
+      } else {
+        const response = await fetch(folder.href);
+        if (!response.ok) throw new Error(`Could not list images in ${folderUrl}. The server must allow directory listings.`);
+        const html = await response.text();
+        const listing = new DOMParser().parseFromString(html, 'text/html');
+        fileUrls = [...listing.querySelectorAll('a[href]')]
+          .map(link => link.getAttribute('href'))
+          .filter(href => href && /\.jpe?g$/i.test(href))
+          .map(href => new URL(href, folder.href).href);
+      }
+
+      if (!fileUrls.length) {
+        throw new Error(`No JPEG images were found in ${folderUrl}.`);
+      }
+
+      const uniqueUrls = [...new Set(fileUrls)].sort((a, b) => a.localeCompare(b));
+      const results = [];
+      for (let i = 0; i < uniqueUrls.length; i += 6) {
+        const batch = await Promise.all(uniqueUrls.slice(i, i + 6).map(async url => {
+          try { return await readImageMetadata(url); }
+          catch (error) {
+            console.warn(`Skipping unreadable JPEG metadata for ${url}:`, error);
+            const filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '').replace(/\.jpe?g$/i, '').replace(/[_-]+/g, ' ');
+            return {
+              url,
+              title: filename || 'Untitled',
+              keywords: '',
+              year: '',
+              medium: '',
+              technic: '',
+              width: '',
+              height: '',
+              dimensions: '',
+              dimensionsFromMetadata: false
+            };
+          }
+        }));
+        results.push(...batch.filter(Boolean));
+      }
+      return results;
+    }
+    function selectedFilename(value) {
+      const name = String(value || '').replace(/\\/g, '/').split('/').pop() || '';
+      try { return decodeURIComponent(name).toLowerCase(); } catch { return name.toLowerCase(); }
+    }
+    async function initCatalog() {
+      if (!siteConfig.imgFolderUrls.length) {
+        throw new Error('ImgFolderUrls must contain at least one JPEG folder URL.');
+      }
+      const catalogs = await Promise.all(siteConfig.imgFolderUrls.map(loadFolderCatalog));
+      allImages = catalogs.flat();
+
+      if (siteConfig.selected && Array.isArray(siteConfig.selected.images)) {
+        const imagesByFilename = new Map(allImages.map(image => [selectedFilename(new URL(image.url).pathname), image]));
+        filteredImages = siteConfig.selected.images
+          .map(selectedName => imagesByFilename.get(selectedFilename(selectedName)))
+          .filter(Boolean);
+      } else {
+        const terms = splitSearchTerms(getSearchQuery());
+        filteredImages = terms.length
+          ? allImages.filter(image => {
+              const haystacks = [image.title, image.keywords, image.medium, image.technic].map(value => (value || '').toLowerCase());
+              return terms.some(term => haystacks.some(value => value.includes(term)));
+            })
+          : [...allImages];
+      }
+      renderGrid();
+    }
+    function formatDimensions(item) {
+      if (item && item.width !== undefined && item.height !== undefined && item.width !== null && item.height !== null && item.width !== '' && item.height !== '') {
+        return `${item.width} × ${item.height}`;
+      }
+      return item?.dimensions || '';
+    }
+    function formatMedium(item) {
+      const medium = item.medium || '';
+      const technic = item.technic || '';
+      if (medium && technic) return `${medium} (${technic})`;
+      return medium || technic;
+    }
+    function renderGrid() {
+      workspace.classList.remove('show-single');
+      backToGridBtn.style.display = 'none'; fsBtn.style.display = 'none'; homeHubBtn.style.display = '';
+      gridView.replaceChildren();
+      if (!filteredImages.length) { gridView.textContent = 'No matching artworks found.'; return; }
+      filteredImages.forEach((image,index) => {
+        const card = document.createElement('article'); card.className = 'preview-card'; card.onclick = () => launchSingleView(index);
+        const frame = document.createElement('div'); frame.className = 'preview-frame';
+        const img = document.createElement('img'); img.src = image.url; img.alt = image.title || 'Artwork'; frame.appendChild(img);
+        const info = document.createElement('div'); info.className = 'preview-info';
+        const title = document.createElement('h3'); title.textContent = image.title || 'Untitled';
+        const details = document.createElement('p'); details.textContent = `${formatMedium(image) || 'N/A'} • ${image.year || 'Unknown'}`;
+        info.append(title,details); card.append(frame,info); gridView.appendChild(card);
+      });
+    }
+    function launchSingleView(index) {
+      currentIndex = index; workspace.classList.add('show-single');
+      backToGridBtn.style.display = ''; fsBtn.style.display = ''; homeHubBtn.style.display = 'none'; renderActiveImage();
+    }
+    function exitToGrid() { resetZoom(); if (document.fullscreenElement) document.exitFullscreen(); renderGrid(); }
+    function renderActiveImage() {
+      resetZoom(); const item = filteredImages[currentIndex]; if (!item) return;
+      galleryImg.src = item.url;
+      document.getElementById('metaTitle').textContent = item.title || 'Untitled';
+      document.getElementById('metaDetails').textContent = [formatMedium(item),formatDimensions(item),item.year].filter(Boolean).join(' • ');
+    }
+    function navigate(direction) {
+      if (!filteredImages.length) return;
+      currentIndex = (currentIndex + direction + filteredImages.length) % filteredImages.length; renderActiveImage();
+    }
+    function updateTransform() { imgWrapper.style.transform = `translate(${pointX}px,${pointY}px) scale(${scale})`; }
+    function resetZoom() { scale = 1; pointX = 0; pointY = 0; updateTransform(); }
+    stage.addEventListener('wheel', event => {
+      if (!workspace.classList.contains('show-single')) return;
+      event.preventDefault(); scale = Math.min(5,Math.max(1,scale + (event.deltaY < 0 ? .1 : -.1)));
+      if (scale === 1) { pointX = 0; pointY = 0; } updateTransform();
+    }, { passive:false });
+    imgWrapper.addEventListener('mousedown', event => {
+      if (scale === 1) return; event.preventDefault(); startX = event.clientX-pointX; startY = event.clientY-pointY; isPanning = true;
+    });
+    window.addEventListener('mousemove', event => { if (!isPanning) return; pointX = event.clientX-startX; pointY = event.clientY-startY; updateTransform(); });
+    window.addEventListener('mouseup', () => { isPanning = false; });
+    stage.addEventListener('touchstart', event => {
+      if (event.touches.length === 2) lastTouchDist = Math.hypot(event.touches[0].clientX-event.touches[1].clientX,event.touches[0].clientY-event.touches[1].clientY);
+      else if (event.touches.length === 1) {
+        touchStartX = event.touches[0].clientX; touchStartY = event.touches[0].clientY;
+        if (scale > 1) { startX = touchStartX-pointX; startY = touchStartY-pointY; isPanning = true; }
+      }
+    });
+    stage.addEventListener('touchmove', event => {
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        const dist = Math.hypot(event.touches[0].clientX-event.touches[1].clientX,event.touches[0].clientY-event.touches[1].clientY);
+        if (lastTouchDist) scale = Math.min(5,Math.max(1,scale * dist / lastTouchDist));
+        lastTouchDist = dist; if (scale === 1) { pointX = 0; pointY = 0; } updateTransform();
+      } else if (event.touches.length === 1 && isPanning) {
+        event.preventDefault(); pointX = event.touches[0].clientX-startX; pointY = event.touches[0].clientY-startY; updateTransform();
+      }
+    }, { passive:false });
+    stage.addEventListener('touchend', event => {
+      if (!event.touches.length && isPanning) isPanning = false;
+      if (scale === 1 && event.changedTouches.length === 1) {
+        const dx = event.changedTouches[0].clientX-touchStartX; const dy = event.changedTouches[0].clientY-touchStartY;
+        if (Math.abs(dx)>60 && Math.abs(dy)<40) navigate(dx>0?-1:1);
+      }
+    });
+    function toggleFullScreen() {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.();
+    }
+    document.addEventListener('fullscreenchange', () => {
+      document.body.classList.toggle('fullscreen-mode', Boolean(document.fullscreenElement));
+      if (!document.fullscreenElement) resetZoom();
+    });
+    imgWrapper.addEventListener('click', toggleFullScreen);
+    window.addEventListener('keydown', event => {
+      if (!workspace.classList.contains('show-single')) return;
+      if (event.key === 'ArrowRight') navigate(1);
+      if (event.key === 'ArrowLeft') navigate(-1);
+      if (event.key === 'Escape' && !document.fullscreenElement) exitToGrid();
+    });
+    async function loadGalleryTitle() {
+      const titleEl = document.getElementById('galleryTitle');
+      if (siteConfig.selected && typeof siteConfig.selected.title === 'string') {
+        titleEl.textContent = siteConfig.selected.title;
+        return;
+      }
+      const query = getSearchQuery(); if (!query) return;
+      try {
+        const response = await fetch(siteConfig.galleriesUrl);
+        if (!response.ok) throw new Error('Could not load galleries');
+        const galleries = await response.json();
+        const current = galleries.find(gallery => (gallery.searchCriteria || '').trim().toLowerCase() === query);
+        titleEl.textContent = current?.title || formatSearchTerms(query) || query.charAt(0).toUpperCase() + query.slice(1);
+      } catch (error) {
+        console.error(error);
+        titleEl.textContent = formatSearchTerms(query) || query;
+      }
+    }
+    window.addEventListener('load', async () => {
+      try { siteConfig = await loadSiteConfig(); applyBranding(); await Promise.all([initCatalog(),loadGalleryTitle()]); }
+      catch (error) { console.error(error); gridView.textContent = 'Unable to load configuration or artwork data. Check the config URL and image folder listing/CORS settings.'; }
+    });
+  </script>
+</body>
+</html>
